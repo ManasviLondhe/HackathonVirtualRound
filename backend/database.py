@@ -32,6 +32,8 @@ def init_db():
         approver_designation TEXT,
         manager_id INTEGER,
         is_manager_approver INTEGER DEFAULT 0,
+        trust_score REAL DEFAULT 100,
+        last_seen TIMESTAMP,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         FOREIGN KEY (company_id) REFERENCES companies(id),
         FOREIGN KEY (manager_id) REFERENCES users(id)
@@ -54,11 +56,14 @@ def init_db():
         description TEXT,
         vendor_name TEXT,
         date TEXT NOT NULL,
+        time TEXT,
+        location TEXT,
         receipt_image_path TEXT,
         ocr_raw_data TEXT,
         ocr_match_status INTEGER,
         status TEXT DEFAULT 'pending',
         current_step INTEGER DEFAULT 1,
+        risk_level TEXT DEFAULT 'low',
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         FOREIGN KEY (user_id) REFERENCES users(id)
     );
@@ -102,6 +107,39 @@ def init_db():
         FOREIGN KEY (company_id) REFERENCES companies(id),
         FOREIGN KEY (specific_approver_id) REFERENCES users(id)
     );
+    CREATE TABLE IF NOT EXISTS role_relationships (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        company_id INTEGER NOT NULL,
+        head_user_id INTEGER NOT NULL,
+        member_user_id INTEGER NOT NULL,
+        FOREIGN KEY (company_id) REFERENCES companies(id),
+        FOREIGN KEY (head_user_id) REFERENCES users(id),
+        FOREIGN KEY (member_user_id) REFERENCES users(id),
+        UNIQUE(head_user_id, member_user_id)
+    );
+    CREATE TABLE IF NOT EXISTS risk_thresholds (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        company_id INTEGER NOT NULL,
+        risk_level TEXT NOT NULL,
+        min_amount REAL DEFAULT 0,
+        max_amount REAL,
+        FOREIGN KEY (company_id) REFERENCES companies(id)
+    );
     """)
     conn.commit()
+
+    # Migrate existing tables — add new columns if they don't exist yet
+    for stmt in [
+        "ALTER TABLE users ADD COLUMN trust_score REAL DEFAULT 100",
+        "ALTER TABLE users ADD COLUMN last_seen TIMESTAMP",
+        "ALTER TABLE expenses ADD COLUMN risk_level TEXT DEFAULT 'low'",
+        "ALTER TABLE expenses ADD COLUMN time TEXT",
+        "ALTER TABLE expenses ADD COLUMN location TEXT",
+    ]:
+        try:
+            conn.execute(stmt)
+            conn.commit()
+        except Exception:
+            pass  # column already exists
+
     conn.close()

@@ -30,6 +30,10 @@ def get_current_user(creds: HTTPAuthorizationCredentials = Depends(security)):
     db = get_db()
     try:
         user = db.execute("SELECT * FROM users WHERE id=?", (user_id,)).fetchone()
+        if user:
+            db.execute("UPDATE users SET last_seen=? WHERE id=?",
+                       (datetime.utcnow().isoformat(), user_id))
+            db.commit()
     finally:
         db.close()
     if not user:
