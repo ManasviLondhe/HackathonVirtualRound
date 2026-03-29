@@ -11,7 +11,7 @@ from routes.ocr_routes import router as ocr_router
 
 app = FastAPI(title="Reimbursement API")
 
-ALLOWED_ORIGINS = os.environ.get("ALLOWED_ORIGINS", "http://localhost:3000,http://localhost:5173").split(",")
+ALLOWED_ORIGINS = os.environ.get("ALLOWED_ORIGINS", "http://localhost:3000,http://localhost:5173,http://localhost:5174,http://localhost:5175").split(",")
 app.add_middleware(CORSMiddleware, allow_origins=ALLOWED_ORIGINS,
                    allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 
