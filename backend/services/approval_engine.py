@@ -104,10 +104,25 @@ def process_approval_action(expense_id: int, approver_id: int, action: str, comm
                 db.commit()
                 return {"status": "escalated", "next_step": next_step["step_order"]}
             else:
-                # Already at top — auto approve
-                db.execute("UPDATE expenses SET status='approved' WHERE id=?", (expense_id,))
+                # No next step exists — dynamically find Finance Head via role_relationships
+                fh = db.execute(
+                    "SELECT head_user_id FROM role_relationships WHERE member_user_id=?",
+                    (step["approver_id"],)
+                ).fetchone()
+                if not fh:
+                    # No Finance Head linked — auto approve
+                    db.execute("UPDATE expenses SET status='approved' WHERE id=?", (expense_id,))
+                    db.commit()
+                    return {"status": "approved"}
+                new_step_order = step["step_order"] + 1
+                db.execute(
+                    "INSERT INTO approval_steps (expense_id, approver_id, step_order) VALUES (?,?,?)",
+                    (expense_id, fh["head_user_id"], new_step_order)
+                )
+                db.execute("UPDATE expenses SET current_step=? WHERE id=?",
+                           (new_step_order, expense_id))
                 db.commit()
-                return {"status": "approved"}
+                return {"status": "escalated", "next_step": new_step_order}
 
         # Approve — fully approved, skip all remaining steps, chain ends
         db.execute(
