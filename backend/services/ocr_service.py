@@ -3,7 +3,7 @@ from PIL import Image
 try:
     import pytesseract
     OCR_AVAILABLE = True
-except:
+except Exception:
     OCR_AVAILABLE = False
 
 def extract_text(image_bytes):
@@ -12,7 +12,7 @@ def extract_text(image_bytes):
     try:
         img = Image.open(io.BytesIO(image_bytes))
         return pytesseract.image_to_string(img)
-    except:
+    except Exception:
         return ""
 
 def parse_receipt(text):

@@ -1,28 +1,17 @@
 from fastapi import APIRouter, HTTPException, Depends, UploadFile, File, Form
-from pydantic import BaseModel
-from typing import Optional, List
-import json, os, shutil
+from typing import Optional
+import json, os, shutil, uuid
 from database import get_db
 from auth import get_current_user
 from services.approval_engine import build_approval_steps, get_expense_trail
 from services.ocr_service import process_receipt
-import httpx
+from services.currency_service import convert_currency
+from services.email_service import send_approval_notification
 
 router = APIRouter(prefix="/expenses", tags=["expenses"])
 
 UPLOAD_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "uploads")
 os.makedirs(UPLOAD_DIR, exist_ok=True)
-
-async def convert_currency(amount, from_cur, to_cur):
-    if from_cur == to_cur:
-        return amount
-    try:
-        async with httpx.AsyncClient(timeout=5) as client:
-            r = await client.get(f"https://api.exchangerate-api.com/v4/latest/{from_cur}")
-            rates = r.json().get("rates", {})
-            return round(amount * rates.get(to_cur, 1), 2)
-    except:
-        return amount
 
 @router.post("/submit")
 async def submit_expense(
@@ -50,13 +39,14 @@ async def submit_expense(
 
         if receipt:
             ext = os.path.splitext(receipt.filename)[1]
-            fname = f"receipt_{cu['id']}_{date.replace('-','')}{ext}"
+            fname = f"receipt_{cu['id']}_{date.replace('-','')}_{uuid.uuid4().hex[:8]}{ext}"
             fpath = os.path.join(UPLOAD_DIR, fname)
             with open(fpath, "wb") as f:
                 shutil.copyfileobj(receipt.file, f)
             receipt_path = fname
 
-            content = open(fpath, "rb").read()
+            with open(fpath, "rb") as f:
+                content = f.read()
             ocr_result = process_receipt(content)
             ocr_data = json.dumps(ocr_result)
 
@@ -78,6 +68,29 @@ async def submit_expense(
 
         db.commit()
         build_approval_steps(expense_id, cu["id"], emp["company_id"])
+
+        # Notify the first approver by email
+        company_full = db.execute("SELECT * FROM companies WHERE id=?", (emp["company_id"],)).fetchone()
+        if company_full and company_full["smtp_email"]:
+            first_step = db.execute(
+                """SELECT u.email as approver_email, u.name as approver_name
+                   FROM approval_steps aps JOIN users u ON u.id=aps.approver_id
+                   WHERE aps.expense_id=? ORDER BY aps.step_order LIMIT 1""",
+                (expense_id,)
+            ).fetchone()
+            if first_step:
+                send_approval_notification(
+                    smtp_email=company_full["smtp_email"],
+                    smtp_app_password=company_full["smtp_app_password"],
+                    to=first_step["approver_email"],
+                    approver_name=first_step["approver_name"],
+                    employee_name=cu["name"],
+                    expense_id=expense_id,
+                    amount=amount,
+                    currency=currency,
+                    category=category,
+                )
+
         return {"id": expense_id, "message": "Expense submitted"}
     finally:
         db.close()
@@ -114,6 +127,15 @@ def get_expense(expense_id: int, cu=Depends(get_current_user)):
         e = db.execute("SELECT * FROM expenses WHERE id=?", (expense_id,)).fetchone()
         if not e:
             raise HTTPException(404, "Not found")
+        # Only the owner or an approver assigned to this expense may view it
+        is_owner = e["user_id"] == cu["id"]
+        is_approver = db.execute(
+            "SELECT 1 FROM approval_steps WHERE expense_id=? AND approver_id=?",
+            (expense_id, cu["id"])
+        ).fetchone()
+        is_admin = cu["role"] == "admin"
+        if not (is_owner or is_approver or is_admin):
+            raise HTTPException(403, "Access denied")
         result = dict(e)
         result["trail"] = get_expense_trail(expense_id)
         result["expense_lines"] = [dict(l) for l in db.execute(

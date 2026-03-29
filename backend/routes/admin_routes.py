@@ -1,10 +1,9 @@
 from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel
-from typing import Optional, List
+from typing import Optional, List, Literal
 from database import get_db
 from auth import hash_password, require_role
-import smtplib
-from email.mime.text import MIMEText
+from services.email_service import send_email
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 
@@ -18,7 +17,7 @@ class CreateEmployeeReq(BaseModel):
     name: str
     email: str
     password: str
-    role: str = "employee"
+    role: Literal["employee", "manager"] = "employee"
     manager_id: Optional[int] = None
     is_manager_approver: bool = False
     approver_mappings: Optional[List[dict]] = []
@@ -42,18 +41,6 @@ class RuleReq(BaseModel):
     min_amount: Optional[float] = None
     max_amount: Optional[float] = None
     category: Optional[str] = None
-
-def send_email(smtp_email, smtp_pwd, to, name, pwd):
-    try:
-        msg = MIMEText(f"Hi {name},\n\nYour account is ready.\nEmail: {to}\nPassword: {pwd}\n\nPlease change your password on first login.")
-        msg["Subject"] = "Your Reimbursement Portal Credentials"
-        msg["From"] = smtp_email
-        msg["To"] = to
-        with smtplib.SMTP_SSL("smtp.gmail.com", 465) as s:
-            s.login(smtp_email, smtp_pwd)
-            s.send_message(msg)
-    except Exception as e:
-        print(f"Email failed: {e}")
 
 @router.post("/settings/smtp")
 def save_smtp(req: SMTPReq, cu=Depends(require_role("admin"))):
@@ -87,7 +74,7 @@ def create_approver(req: CreateApproverReq, cu=Depends(require_role("admin"))):
         db.commit()
         c = db.execute("SELECT * FROM companies WHERE id=?", (cu["company_id"],)).fetchone()
         if c and c["smtp_email"]:
-            send_email(c["smtp_email"], c["smtp_app_password"], req.email, req.name, req.password)
+            send_email(c["smtp_email"], c["smtp_app_password"], req.email, req.name)  # pwd omitted intentionally
         return {"message": "Approver created"}
     finally:
         db.close()
@@ -106,6 +93,8 @@ def list_approvers(cu=Depends(require_role("admin"))):
 def delete_approver(aid: int, cu=Depends(require_role("admin"))):
     db = get_db()
     try:
+        db.execute("DELETE FROM employee_approver_mappings WHERE approver_id=?", (aid,))
+        db.execute("DELETE FROM approval_steps WHERE approver_id=?", (aid,))
         db.execute("DELETE FROM users WHERE id=? AND company_id=?", (aid, cu["company_id"]))
         db.commit()
         return {"message": "Deleted"}
@@ -129,7 +118,7 @@ def create_employee(req: CreateEmployeeReq, cu=Depends(require_role("admin"))):
         db.commit()
         c = db.execute("SELECT * FROM companies WHERE id=?", (cu["company_id"],)).fetchone()
         if c and c["smtp_email"]:
-            send_email(c["smtp_email"], c["smtp_app_password"], req.email, req.name, req.password)
+            send_email(c["smtp_email"], c["smtp_app_password"], req.email, req.name)  # pwd omitted intentionally
         return {"id": uid, "message": "Employee created"}
     finally:
         db.close()

@@ -26,7 +26,6 @@ async def _fetch_rates(base_currency: str) -> dict[str, float]:
     """
     url = f"https://api.exchangerate-api.com/v4/latest/{base_currency.upper()}"
     async with httpx.AsyncClient(timeout=8) as client:
-        resp = client.get(url)
         resp = await client.get(url)
         resp.raise_for_status()
         data = resp.json()
