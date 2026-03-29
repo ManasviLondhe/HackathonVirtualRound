@@ -4,8 +4,9 @@ from passlib.context import CryptContext
 from fastapi import Depends, HTTPException
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from database import get_db
+import os
 
-SECRET_KEY = "reimbursement-secret-2024"
+SECRET_KEY = os.environ.get("SECRET_KEY", "reimbursement-secret-2024")
 ALGORITHM = "HS256"
 EXPIRE_MINUTES = 600
 
@@ -27,9 +28,12 @@ def get_current_user(creds: HTTPAuthorizationCredentials = Depends(security)):
     except JWTError:
         raise HTTPException(status_code=401, detail="Invalid token")
     db = get_db()
-    user = db.execute("SELECT * FROM users WHERE id=?", (user_id,)).fetchone()
-    db.close()
-    if not user: raise HTTPException(status_code=401, detail="User not found")
+    try:
+        user = db.execute("SELECT * FROM users WHERE id=?", (user_id,)).fetchone()
+    finally:
+        db.close()
+    if not user:
+        raise HTTPException(status_code=401, detail="User not found")
     return dict(user)
 
 def require_role(*roles):

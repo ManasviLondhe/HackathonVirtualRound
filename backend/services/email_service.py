@@ -12,24 +12,24 @@ def send_email(
     smtp_app_password: str,
     to: str,
     name: str,
-    pwd: str,
+    pwd: Optional[str] = None,
 ) -> bool:
     """
-    Send onboarding credentials to a newly created user.
+    Send onboarding notification to a newly created user.
+    pwd is intentionally omitted; users should set their password on first login.
     Returns True on success, False on failure.
     """
     try:
         msg = MIMEMultipart("alternative")
-        msg["Subject"] = "Your Reimbursement Portal Credentials"
+        msg["Subject"] = "Your Reimbursement Portal Account"
         msg["From"]    = smtp_email
         msg["To"]      = to
 
         plain = (
             f"Hi {name},\n\n"
             f"Your Reimbursement Portal account has been created.\n\n"
-            f"  Email   : {to}\n"
-            f"  Password: {pwd}\n\n"
-            f"Please log in and change your password immediately.\n\n"
+            f"  Email: {to}\n\n"
+            f"Please log in and change your password on first login.\n\n"
             f"Regards,\nReimbursement Portal"
         )
 
@@ -38,15 +38,11 @@ def send_email(
           <body style="font-family:Arial,sans-serif;color:#333;max-width:520px;margin:auto">
             <h2 style="color:#4F46E5">Reimbursement Portal</h2>
             <p>Hi <strong>{name}</strong>,</p>
-            <p>Your account has been created. Here are your login credentials:</p>
+            <p>Your account has been created. You can log in with:</p>
             <table style="border-collapse:collapse;width:100%;margin:16px 0">
               <tr>
                 <td style="padding:8px 12px;background:#F3F4F6;font-weight:bold;width:120px">Email</td>
                 <td style="padding:8px 12px;background:#F9FAFB">{to}</td>
-              </tr>
-              <tr>
-                <td style="padding:8px 12px;background:#F3F4F6;font-weight:bold">Password</td>
-                <td style="padding:8px 12px;background:#F9FAFB">{pwd}</td>
               </tr>
             </table>
             <p style="color:#DC2626;font-weight:bold">

@@ -7,10 +7,12 @@ from routes.auth_routes import router as auth_router
 from routes.admin_routes import router as admin_router
 from routes.expense_routes import router as expense_router
 from routes.approval_routes import router as approval_router
+from routes.ocr_routes import router as ocr_router
 
 app = FastAPI(title="Reimbursement API")
 
-app.add_middleware(CORSMiddleware, allow_origins=["*"],
+ALLOWED_ORIGINS = os.environ.get("ALLOWED_ORIGINS", "http://localhost:3000,http://localhost:5173").split(",")
+app.add_middleware(CORSMiddleware, allow_origins=ALLOWED_ORIGINS,
                    allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 
 UPLOAD_DIR = os.path.join(os.path.dirname(__file__), "uploads")
@@ -22,6 +24,7 @@ app.include_router(auth_router)
 app.include_router(admin_router)
 app.include_router(expense_router)
 app.include_router(approval_router)
+app.include_router(ocr_router)
 
 @app.get("/")
 def root():
@@ -40,5 +43,5 @@ async def countries():
                     result.append({"country": name, "currency_code": code,
                                    "currency_name": info.get("name",""), "symbol": info.get("symbol","")})
             return sorted(result, key=lambda x: x["country"])
-    except:
+    except Exception:
         return []

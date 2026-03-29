@@ -11,6 +11,9 @@ def build_approval_steps(expense_id, user_id, company_id):
             if emp and emp["manager_id"] and emp["is_manager_approver"]:
                 db.execute("INSERT INTO approval_steps (expense_id,approver_id,step_order) VALUES (?,?,1)",
                            (expense_id, emp["manager_id"]))
+            else:
+                # No approvers configured — auto-approve immediately
+                db.execute("UPDATE expenses SET status='approved' WHERE id=?", (expense_id,))
         else:
             for m in mappings:
                 db.execute("INSERT INTO approval_steps (expense_id,approver_id,step_order) VALUES (?,?,?)",
