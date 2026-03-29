@@ -85,6 +85,25 @@ export default function MyExpenses() {
                       <p className="text-sm text-gray-600 mb-3">{exp.description}</p>
                     )}
 
+                    {/* Receipt Image */}
+                    {exp.receipt_image_path && (
+                      <div className="mb-3">
+                        <p className="text-sm font-medium text-gray-700 mb-2">Receipt</p>
+                        <a
+                          href={`${import.meta.env.VITE_API_URL || "http://localhost:8000"}/uploads/${exp.receipt_image_path}`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                        >
+                          <img
+                            src={`${import.meta.env.VITE_API_URL || "http://localhost:8000"}/uploads/${exp.receipt_image_path}`}
+                            alt="Receipt"
+                            className="max-h-48 rounded-lg border border-gray-200 object-contain cursor-pointer hover:opacity-90"
+                          />
+                        </a>
+                        <p className="text-xs text-gray-400 mt-1">Click to open full size</p>
+                      </div>
+                    )}
+
                     {/* Approval Trail */}
                     {exp.trail && exp.trail.length > 0 && (
                       <div className="mb-3">

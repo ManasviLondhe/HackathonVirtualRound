@@ -75,8 +75,11 @@ def save_smtp(req: SMTPReq, cu=Depends(require_role("admin"))):
 def get_smtp(cu=Depends(require_role("admin"))):
     db = get_db()
     try:
-        c = db.execute("SELECT smtp_email FROM companies WHERE id=?", (cu["company_id"],)).fetchone()
-        return {"smtp_email": c["smtp_email"] if c else None}
+        c = db.execute("SELECT smtp_email, smtp_app_password FROM companies WHERE id=?", (cu["company_id"],)).fetchone()
+        return {
+            "smtp_email": c["smtp_email"] if c else None,
+            "smtp_password_set": bool(c["smtp_app_password"]) if c else False,
+        }
     finally:
         db.close()
 

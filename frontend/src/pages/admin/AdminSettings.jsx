@@ -2,18 +2,22 @@ import { useState, useEffect } from "react";
 import { saveSMTP, getSMTP } from "../../services/api";
 import DashboardLayout from "../../components/DashboardLayout";
 import toast from "react-hot-toast";
-import { Settings, Mail, Lock, Save, Eye, EyeOff } from "lucide-react";
+import { Mail, Lock, Save, Eye, EyeOff } from "lucide-react";
 
 export default function AdminSettings() {
   const [form, setForm] = useState({ smtp_email: "", smtp_app_password: "" });
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
+  const [passwordLocked, setPasswordLocked] = useState(false);
 
   useEffect(() => {
     getSMTP()
       .then((res) => {
         setForm((prev) => ({ ...prev, smtp_email: res.data.smtp_email || "" }));
+        if (res.data.smtp_password_set) {
+          setPasswordLocked(true);
+        }
       })
       .finally(() => setLoading(false));
   }, []);
@@ -43,7 +47,7 @@ export default function AdminSettings() {
           <div className="animate-spin rounded-full h-10 w-10 border-b-2 border-indigo-600"></div>
         </div>
       ) : (
-        <div className="max-w-xl">
+        <div className="grid lg:grid-cols-2 gap-6 max-w-4xl">
           <div className="card">
             <div className="flex items-center gap-3 mb-6">
               <div className="w-10 h-10 bg-indigo-100 rounded-lg flex items-center justify-center">
@@ -51,9 +55,6 @@ export default function AdminSettings() {
               </div>
               <div>
                 <h2 className="text-lg font-semibold text-gray-900">Email Configuration (SMTP)</h2>
-                <p className="text-sm text-gray-500">
-                  Used to send login credentials to employees and approvers
-                </p>
               </div>
             </div>
 
@@ -71,7 +72,6 @@ export default function AdminSettings() {
                     onChange={(e) => setForm({ ...form, smtp_email: e.target.value })}
                   />
                 </div>
-                <p className="text-xs text-gray-400 mt-1">This email will be used as the sender for all notifications</p>
               </div>
 
               <div>
@@ -80,23 +80,40 @@ export default function AdminSettings() {
                   <Lock className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400" />
                   <input
                     type={showPassword ? "text" : "password"}
-                    required
-                    className="input-field pl-10 pr-10"
-                    placeholder="Google App Password"
+                    required={!passwordLocked}
+                    disabled={passwordLocked}
+                    className={`input-field pl-10 pr-20 ${passwordLocked ? "bg-gray-100 text-gray-400 cursor-not-allowed" : ""}`}
+                    placeholder={passwordLocked ? "●●●●●●●●●●●●●●●●" : "Google App Password"}
                     value={form.smtp_app_password}
                     onChange={(e) => setForm({ ...form, smtp_app_password: e.target.value })}
                   />
-                  <button
-                    type="button"
-                    className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
-                    onClick={() => setShowPassword(!showPassword)}
-                  >
-                    {showPassword ? <EyeOff className="w-5 h-5" /> : <Eye className="w-5 h-5" />}
-                  </button>
+                  <div className="absolute right-2 top-1/2 -translate-y-1/2 flex items-center gap-1">
+                    {!passwordLocked && (
+                      <button
+                        type="button"
+                        className="text-gray-400 hover:text-gray-600"
+                        onClick={() => setShowPassword(!showPassword)}
+                      >
+                        {showPassword ? <EyeOff className="w-5 h-5" /> : <Eye className="w-5 h-5" />}
+                      </button>
+                    )}
+                    {passwordLocked && (
+                      <button
+                        type="button"
+                        className="text-xs text-indigo-600 hover:text-indigo-700 font-medium px-1"
+                        onClick={() => {
+                          setPasswordLocked(false);
+                          setForm((prev) => ({ ...prev, smtp_app_password: "" }));
+                        }}
+                      >
+                        Edit
+                      </button>
+                    )}
+                  </div>
                 </div>
-                <p className="text-xs text-gray-400 mt-1">
-                  Generate an App Password from Google Account settings (2FA must be enabled)
-                </p>
+                {passwordLocked && (
+                  <p className="text-xs text-emerald-600 mt-1">App password is saved. Click Edit to change it.</p>
+                )}
               </div>
 
               <button type="submit" disabled={saving} className="btn-primary flex items-center gap-2">
@@ -106,20 +123,24 @@ export default function AdminSettings() {
             </form>
           </div>
 
-          <div className="card mt-4">
-            <h3 className="font-semibold text-gray-900 mb-2">How it works</h3>
-            <ul className="text-sm text-gray-600 space-y-1.5">
+          <div className="card">
+            <h3 className="font-semibold text-gray-900 mb-4">How it works</h3>
+            <ul className="text-sm text-gray-600 space-y-3">
               <li className="flex items-start gap-2">
                 <span className="w-5 h-5 bg-indigo-100 rounded-full flex items-center justify-center text-xs font-medium text-indigo-700 mt-0.5 shrink-0">1</span>
-                Configure your Gmail and App Password above
+                Configure your Gmail and App Password on the left
               </li>
               <li className="flex items-start gap-2">
                 <span className="w-5 h-5 bg-indigo-100 rounded-full flex items-center justify-center text-xs font-medium text-indigo-700 mt-0.5 shrink-0">2</span>
-                When you create employees or approvers, their credentials are automatically emailed
+                When you create employees or approvers, their login credentials are automatically emailed to them
               </li>
               <li className="flex items-start gap-2">
                 <span className="w-5 h-5 bg-indigo-100 rounded-full flex items-center justify-center text-xs font-medium text-indigo-700 mt-0.5 shrink-0">3</span>
                 Users must change their password on first login
+              </li>
+              <li className="flex items-start gap-2">
+                <span className="w-5 h-5 bg-amber-100 rounded-full flex items-center justify-center text-xs font-medium text-amber-700 mt-0.5 shrink-0">!</span>
+                Use a Gmail App Password — go to Google Account → Security → 2-Step Verification → App Passwords
               </li>
             </ul>
           </div>

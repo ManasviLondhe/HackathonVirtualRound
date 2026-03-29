@@ -17,6 +17,7 @@ export default function DirectorDashboard() {
           rejected: history.filter((h) => h.my_decision === "rejected").length,
         });
       })
+      .catch(() => {})
       .finally(() => setLoading(false));
   }, []);
 

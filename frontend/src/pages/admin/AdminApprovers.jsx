@@ -16,6 +16,7 @@ export default function AdminApprovers() {
   const [search, setSearch] = useState("");
   const [loading, setLoading] = useState(true);
   const [form, setForm] = useState({ name: "", email: "", password: "", role: "manager" });
+  const [submitting, setSubmitting] = useState(false);
 
   const fetchData = () => {
     listApprovers()
@@ -27,6 +28,12 @@ export default function AdminApprovers() {
 
   const handleSubmit = async (e) => {
     e.preventDefault();
+    if (!form.name.trim()) { toast.error("Name is required"); return; }
+    if (!form.email.trim() || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(form.email)) {
+      toast.error("Enter a valid email address"); return;
+    }
+    if (form.password.length < 6) { toast.error("Password must be at least 6 characters"); return; }
+    setSubmitting(true);
     try {
       await createUser(form);
       toast.success("Approver created! Credentials will be sent via email.");
@@ -35,6 +42,8 @@ export default function AdminApprovers() {
       fetchData();
     } catch (err) {
       toast.error(err.response?.data?.detail || "Failed to create approver");
+    } finally {
+      setSubmitting(false);
     }
   };
 
@@ -76,21 +85,21 @@ export default function AdminApprovers() {
       {showForm && (
         <div className="card mb-6">
           <h2 className="text-lg font-semibold mb-4">Create New Approver</h2>
-          <form onSubmit={handleSubmit} className="space-y-4">
+          <form onSubmit={handleSubmit} className="space-y-4" autoComplete="off">
             <div className="grid md:grid-cols-2 gap-4">
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Name</label>
-                <input type="text" required className="input-field" value={form.name}
+                <label className="block text-sm font-medium text-gray-700 mb-1">Name <span className="text-red-500">*</span></label>
+                <input type="text" autoComplete="off" className="input-field" value={form.name}
                   onChange={(e) => setForm({ ...form, name: e.target.value })} />
               </div>
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Email</label>
-                <input type="email" required className="input-field" value={form.email}
+                <label className="block text-sm font-medium text-gray-700 mb-1">Email <span className="text-red-500">*</span></label>
+                <input type="email" autoComplete="off" className="input-field" value={form.email}
                   onChange={(e) => setForm({ ...form, email: e.target.value })} />
               </div>
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Password</label>
-                <input type="text" required className="input-field" value={form.password}
+                <label className="block text-sm font-medium text-gray-700 mb-1">Password <span className="text-red-500">*</span> <span className="text-xs text-gray-400">(min 6 chars)</span></label>
+                <input type="text" autoComplete="new-password" className="input-field" value={form.password}
                   onChange={(e) => setForm({ ...form, password: e.target.value })}
                   placeholder="Temporary password" />
               </div>
@@ -105,7 +114,9 @@ export default function AdminApprovers() {
               </div>
             </div>
             <div className="flex gap-3">
-              <button type="submit" className="btn-primary">Create Approver</button>
+              <button type="submit" disabled={submitting} className="btn-primary">
+                {submitting ? "Creating..." : "Create Approver"}
+              </button>
               <button type="button" onClick={() => setShowForm(false)} className="btn-secondary">Cancel</button>
             </div>
           </form>

@@ -26,6 +26,7 @@ def pending_approvals(cu=Depends(get_current_user)):
                JOIN users u ON u.id=e.user_id
                JOIN companies c ON c.id=u.company_id
                WHERE aps.approver_id=? AND aps.status='pending' AND e.status='pending'
+               AND aps.step_order = e.current_step
                ORDER BY e.created_at DESC""",
             (cu["id"],)
         ).fetchall()

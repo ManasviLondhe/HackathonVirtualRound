@@ -10,6 +10,7 @@ export default function AdminEmployees() {
   const [showForm, setShowForm] = useState(false);
   const [search, setSearch] = useState("");
   const [loading, setLoading] = useState(true);
+  const [submitting, setSubmitting] = useState(false);
   const [form, setForm] = useState({
     name: "", email: "", password: "", role: "employee", manager_id: "", approver_mappings: [],
   });
@@ -32,10 +33,13 @@ export default function AdminEmployees() {
 
   const handleSubmit = async (e) => {
     e.preventDefault();
-    if (!form.manager_id) {
-      toast.error("Please assign a manager before creating an employee.");
-      return;
+    if (!form.name.trim()) { toast.error("Name is required"); return; }
+    if (!form.email.trim() || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(form.email)) {
+      toast.error("Enter a valid email address"); return;
     }
+    if (form.password.length < 6) { toast.error("Password must be at least 6 characters"); return; }
+    if (!form.manager_id) { toast.error("Please assign a manager before creating an employee."); return; }
+    setSubmitting(true);
     try {
       await createUser({
         ...form,
@@ -48,6 +52,8 @@ export default function AdminEmployees() {
       fetchData();
     } catch (err) {
       toast.error(err.response?.data?.detail || "Failed to create employee");
+    } finally {
+      setSubmitting(false);
     }
   };
 
@@ -105,21 +111,21 @@ export default function AdminEmployees() {
       {showForm && (
         <div className="card mb-6">
           <h2 className="text-lg font-semibold mb-4">Create New Employee</h2>
-          <form onSubmit={handleSubmit} className="space-y-4">
+          <form onSubmit={handleSubmit} className="space-y-4" autoComplete="off">
             <div className="grid md:grid-cols-3 gap-4">
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Name</label>
-                <input type="text" required className="input-field" value={form.name}
+                <label className="block text-sm font-medium text-gray-700 mb-1">Name <span className="text-red-500">*</span></label>
+                <input type="text" autoComplete="off" className="input-field" value={form.name}
                   onChange={(e) => setForm({ ...form, name: e.target.value })} />
               </div>
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Email</label>
-                <input type="email" required className="input-field" value={form.email}
+                <label className="block text-sm font-medium text-gray-700 mb-1">Email <span className="text-red-500">*</span></label>
+                <input type="email" autoComplete="off" className="input-field" value={form.email}
                   onChange={(e) => setForm({ ...form, email: e.target.value })} />
               </div>
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Password</label>
-                <input type="text" required className="input-field" value={form.password}
+                <label className="block text-sm font-medium text-gray-700 mb-1">Password <span className="text-red-500">*</span> <span className="text-xs text-gray-400">(min 6 chars)</span></label>
+                <input type="text" autoComplete="new-password" className="input-field" value={form.password}
                   onChange={(e) => setForm({ ...form, password: e.target.value })}
                   placeholder="Temporary password" />
               </div>
@@ -127,10 +133,10 @@ export default function AdminEmployees() {
 
             <div className="grid md:grid-cols-2 gap-4">
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Assign Manager</label>
-                <select className="input-field" value={form.manager_id}
+                <label className="block text-sm font-medium text-gray-700 mb-1">Assign Manager <span className="text-red-500">*</span></label>
+                <select required className="input-field" value={form.manager_id}
                   onChange={(e) => setForm({ ...form, manager_id: e.target.value })}>
-                  <option value="">No Manager</option>
+                  <option value="">Select a Manager</option>
                   {managers.map((m) => (
                     <option key={m.id} value={m.id}>{m.name} ({m.approver_designation})</option>
                   ))}
@@ -164,7 +170,9 @@ export default function AdminEmployees() {
             </div>
 
             <div className="flex gap-3">
-              <button type="submit" className="btn-primary">Create Employee</button>
+              <button type="submit" disabled={submitting} className="btn-primary">
+                {submitting ? "Creating..." : "Create Employee"}
+              </button>
               <button type="button" onClick={() => setShowForm(false)} className="btn-secondary">Cancel</button>
             </div>
           </form>

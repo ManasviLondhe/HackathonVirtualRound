@@ -7,6 +7,7 @@ const statusStyles = {
   pending: { bg: "bg-amber-100", text: "text-amber-700", icon: Clock },
   approved: { bg: "bg-emerald-100", text: "text-emerald-700", icon: CheckCircle },
   rejected: { bg: "bg-red-100", text: "text-red-700", icon: XCircle },
+  escalated: { bg: "bg-orange-100", text: "text-orange-700", icon: ArrowUpRight },
 };
 
 export default function ApprovalList({ expenses, onRefresh, showActions = true }) {
@@ -132,6 +133,26 @@ export default function ApprovalList({ expenses, onRefresh, showActions = true }
                   )}
                 </div>
 
+                {/* Receipt Image */}
+                {exp.receipt_image_path && (
+                  <div className="mb-4">
+                    <p className="text-sm font-medium text-gray-700 mb-2">Receipt</p>
+                    <a
+                      href={`${import.meta.env.VITE_API_URL || "http://localhost:8000"}/uploads/${exp.receipt_image_path}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      <img
+                        src={`${import.meta.env.VITE_API_URL || "http://localhost:8000"}/uploads/${exp.receipt_image_path}`}
+                        alt="Receipt"
+                        className="max-h-48 rounded-lg border border-gray-200 object-contain cursor-pointer hover:opacity-90"
+                      />
+                    </a>
+                    <p className="text-xs text-gray-400 mt-1">Click to open full size</p>
+                  </div>
+                )}
+
                 {/* Approval Trail */}
                 {exp.trail && exp.trail.length > 0 && (
                   <div className="mb-4">
@@ -142,12 +163,14 @@ export default function ApprovalList({ expenses, onRefresh, showActions = true }
                           <span className={`w-6 h-6 rounded-full flex items-center justify-center text-xs ${
                             step.status === "approved" ? "bg-emerald-100 text-emerald-700" :
                             step.status === "rejected" ? "bg-red-100 text-red-700" :
+                            step.status === "escalated" ? "bg-orange-100 text-orange-700" :
                             "bg-gray-100 text-gray-500"
                           }`}>{step.step_order}</span>
                           <span className="text-gray-700">{step.approver_name}</span>
                           <span className={`text-xs capitalize ${
                             step.status === "approved" ? "text-emerald-600" :
-                            step.status === "rejected" ? "text-red-600" : "text-gray-400"
+                            step.status === "rejected" ? "text-red-600" :
+                            step.status === "escalated" ? "text-orange-600" : "text-gray-400"
                           }`}>({step.status})</span>
                           {step.comment && <span className="text-xs text-gray-400">- {step.comment}</span>}
                         </div>
