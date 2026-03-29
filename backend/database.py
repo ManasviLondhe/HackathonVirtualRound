@@ -16,6 +16,7 @@ def init_db():
         name TEXT NOT NULL,
         country TEXT NOT NULL,
         default_currency TEXT NOT NULL,
+        register_password TEXT NOT NULL,
         smtp_email TEXT,
         smtp_app_password TEXT,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
@@ -135,6 +136,7 @@ def init_db():
         "ALTER TABLE expenses ADD COLUMN risk_level TEXT DEFAULT 'low'",
         "ALTER TABLE expenses ADD COLUMN time TEXT",
         "ALTER TABLE expenses ADD COLUMN location TEXT",
+        "ALTER TABLE companies ADD COLUMN register_password TEXT",
     ]:
         try:
             conn.execute(stmt)

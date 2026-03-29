@@ -20,6 +20,9 @@ export default function AdminEmployees() {
         setEmployees(empRes.data);
         setApprovers(appRes.data);
       })
+      .catch((err) => {
+        toast.error(err.response?.data?.detail || "Failed to load employees");
+      })
       .finally(() => setLoading(false));
   };
 
@@ -29,6 +32,10 @@ export default function AdminEmployees() {
 
   const handleSubmit = async (e) => {
     e.preventDefault();
+    if (!form.manager_id) {
+      toast.error("Please assign a manager before creating an employee.");
+      return;
+    }
     try {
       await createUser({
         ...form,

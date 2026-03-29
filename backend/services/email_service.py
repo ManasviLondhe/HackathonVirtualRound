@@ -15,8 +15,7 @@ def send_email(
     pwd: Optional[str] = None,
 ) -> bool:
     """
-    Send onboarding notification to a newly created user.
-    pwd is intentionally omitted; users should set their password on first login.
+    Send onboarding notification to a newly created user including their temporary password.
     Returns True on success, False on failure.
     """
     try:
@@ -25,12 +24,25 @@ def send_email(
         msg["From"]    = smtp_email
         msg["To"]      = to
 
+        pwd_line = f"  Password: {pwd}\n" if pwd else ""
+        pwd_note = "\nPlease change your password immediately after your first login.\n"
+
         plain = (
             f"Hi {name},\n\n"
             f"Your Reimbursement Portal account has been created.\n\n"
-            f"  Email: {to}\n\n"
-            f"Please log in and change your password on first login.\n\n"
+            f"  Email: {to}\n"
+            f"{pwd_line}"
+            f"{pwd_note}\n"
             f"Regards,\nReimbursement Portal"
+        )
+
+        pwd_row = (
+            f"""
+              <tr>
+                <td style="padding:8px 12px;background:#F3F4F6;font-weight:bold;width:120px">Password</td>
+                <td style="padding:8px 12px;background:#F9FAFB;font-family:monospace">{pwd}</td>
+              </tr>"""
+            if pwd else ""
         )
 
         html = f"""
@@ -43,7 +55,7 @@ def send_email(
               <tr>
                 <td style="padding:8px 12px;background:#F3F4F6;font-weight:bold;width:120px">Email</td>
                 <td style="padding:8px 12px;background:#F9FAFB">{to}</td>
-              </tr>
+              </tr>{pwd_row}
             </table>
             <p style="color:#DC2626;font-weight:bold">
               ⚠️ Please change your password immediately after your first login.

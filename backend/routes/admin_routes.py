@@ -115,7 +115,7 @@ def create_user(req: CreateUserReq, cu=Depends(require_role("admin"))):
 
         c = db.execute("SELECT * FROM companies WHERE id=?", (cu["company_id"],)).fetchone()
         if c and c["smtp_email"]:
-            send_email(c["smtp_email"], c["smtp_app_password"], req.email, req.name)
+            send_email(c["smtp_email"], c["smtp_app_password"], req.email, req.name, req.password)
 
         return {"id": uid, "message": f"{req.role.replace('_',' ').title()} created"}
     finally:
@@ -193,6 +193,9 @@ def list_employees(cu=Depends(require_role("admin"))):
 def delete_employee(eid: int, cu=Depends(require_role("admin"))):
     db = get_db()
     try:
+        db.execute("DELETE FROM approval_steps WHERE expense_id IN (SELECT id FROM expenses WHERE user_id=?)", (eid,))
+        db.execute("DELETE FROM expense_lines WHERE expense_id IN (SELECT id FROM expenses WHERE user_id=?)", (eid,))
+        db.execute("DELETE FROM expenses WHERE user_id=?", (eid,))
         db.execute("DELETE FROM employee_approver_mappings WHERE employee_id=?", (eid,))
         db.execute("DELETE FROM role_relationships WHERE head_user_id=? OR member_user_id=?", (eid, eid))
         db.execute("DELETE FROM users WHERE id=? AND company_id=?", (eid, cu["company_id"]))

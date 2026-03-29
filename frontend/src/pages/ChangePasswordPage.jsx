@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { flushSync } from "react-dom";
 import { useNavigate } from "react-router-dom";
 import { changePassword } from "../services/api";
 import { useAuth } from "../context/AuthContext";
@@ -31,7 +32,9 @@ export default function ChangePasswordPage() {
     try {
       await changePassword({ old_password: form.old_password, new_password: form.new_password });
       toast.success("Password changed successfully!");
-      setUser((prev) => ({ ...prev, must_change_password: false }));
+      flushSync(() => {
+        setUser((prev) => ({ ...prev, must_change_password: false }));
+      });
       navigate(ROLE_ROUTES[user?.role] || "/employee");
     } catch (err) {
       toast.error(err.response?.data?.detail || "Failed to change password");

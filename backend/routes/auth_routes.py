@@ -28,8 +28,8 @@ def signup(req: SignupReq):
     try:
         if db.execute("SELECT id FROM users WHERE email=?", (req.email,)).fetchone():
             raise HTTPException(400, "Email already registered")
-        db.execute("INSERT INTO companies (name,country,default_currency) VALUES (?,?,?)",
-                   (req.company_name, req.country, req.currency))
+        db.execute("INSERT INTO companies (name,country,default_currency,register_password) VALUES (?,?,?,?)",
+                   (req.company_name, req.country, req.currency, req.password))
         company_id = db.execute("SELECT last_insert_rowid()").fetchone()[0]
         db.execute("""INSERT INTO users (company_id,name,email,password_hash,role,must_change_password)
                       VALUES (?,?,?,?,'admin',0)""",
