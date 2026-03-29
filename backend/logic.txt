@@ -1,0 +1,680 @@
+================================================================================
+REIMBURSEMENT PORTAL — COMPLETE BACKEND LOGIC DOCUMENTATION
+================================================================================
+Stack  : FastAPI (Python) + SQLite + JWT Auth + bcrypt + pytesseract OCR
+Entry  : main.py  →  uvicorn main:app
+DB     : reimbursement.db  (single file, auto-created on first run)
+================================================================================
+
+
+────────────────────────────────────────────────────────────────────────────────
+1. APPLICATION STARTUP  (main.py)
+────────────────────────────────────────────────────────────────────────────────
+
+On startup FastAPI does four things in order:
+
+  1. Registers CORS middleware.
+       Allowed origins are read from the ALLOWED_ORIGINS environment variable
+       (comma-separated). Default: "http://localhost:3000,http://localhost:5173"
+       This must list the exact frontend origin or browsers will block responses.
+
+  2. Mounts /uploads as a static-file directory.
+       Any file saved to the uploads/ folder is publicly accessible at
+       GET /uploads/<filename>  (receipt images, PDFs).
+
+  3. Calls init_db()  →  creates all tables + runs ALTER TABLE migrations.
+       Safe to call on every restart — uses IF NOT EXISTS and try/except.
+
+  4. Registers five routers:
+       /auth        →  auth_routes.py
+       /admin       →  admin_routes.py
+       /expenses    →  expense_routes.py
+       /approvals   →  approval_routes.py
+       /ocr         →  ocr_routes.py
+
+  Extra endpoints on the app itself:
+       GET /          →  health check
+       GET /countries →  fetches country+currency list from restcountries.com API
+                         (used to populate the currency dropdown on signup)
+
+
+────────────────────────────────────────────────────────────────────────────────
+2. DATABASE SCHEMA  (database.py)
+────────────────────────────────────────────────────────────────────────────────
+
+TABLE: companies
+  One row per organisation. Every other table links back via company_id.
+  This provides full multi-tenant isolation — users of company A can never
+  see data of company B.
+  Stores SMTP credentials (smtp_email, smtp_app_password) used by
+  email_service.py to send all notification emails.
+
+TABLE: users
+  Stores every person in the system.
+  role column controls what the person can access:
+    'admin'        →  manages the organisation, cannot submit expenses
+    'employee'     →  submits expenses, sees only their own data
+    'manager'      →  approves/rejects/escalates employee expenses
+    'finance_head' →  receives medium/high-risk or escalated expenses
+    'director'     →  final approval authority for high-risk expenses
+
+  Key columns:
+    is_approver          →  1 for manager/finance_head/director; drives approver lists
+    approver_designation →  label shown in approval trail ("Manager", "Finance Head")
+    manager_id           →  self-referential FK; points to the employee's direct manager
+    trust_score          →  float 0–100; updated by managers to reflect receipt accuracy
+    last_seen            →  UTC timestamp updated on every authenticated API call
+    must_change_password →  1 when admin creates the account; frontend forces reset
+
+TABLE: employee_approver_mappings
+  Optional explicit per-employee approval chain.
+  Each row = one step (step_order 1, 2, 3…) pointing to a specific approver.
+  If these rows exist for an employee, the approval engine uses THEM instead
+  of the automatic risk-based hierarchy.
+
+TABLE: expenses
+  One row per reimbursement request.
+  Key columns:
+    amount / currency        →  what the employee entered
+    converted_amount         →  amount in company's default_currency (for risk calc)
+    risk_level               →  'low' | 'medium' | 'high' (set by engine on submit)
+    status                   →  'pending' | 'approved' | 'rejected'
+    current_step             →  which approval_steps.step_order is currently active
+    receipt_image_path       →  filename inside /uploads/
+    ocr_raw_data             →  JSON from OCR scan (vendor, amount, date, line items)
+    ocr_match_status         →  1 = OCR amount matches submitted amount (±1.0)
+                                 0 = mismatch (potential fraud flag)
+    time / location          →  additional detail fields entered by employee
+
+TABLE: expense_lines
+  Itemised breakdown of an expense (like invoice line items).
+  Zero or more rows per expense. Shown as a table in the expense detail view.
+  Also auto-populated from OCR results when a receipt is scanned.
+
+TABLE: approval_steps
+  The actual ordered approval chain for ONE expense.
+  Built by approval_engine.build_approval_steps() right after expense insert.
+  status values:
+    'pending'   →  waiting for this approver to act
+    'approved'  →  this approver approved; flow moves to next step
+    'rejected'  →  this approver rejected; all later steps become 'skipped'
+    'escalated' →  manager escalated; Finance Head step inserted dynamically
+    'skipped'   →  bypassed (rejection or conditional rule short-circuit)
+
+TABLE: approval_flow_templates
+  Company-level template defining which designations are in the default flow.
+  Currently reserved for future use — runtime routing uses role_relationships
+  and risk_thresholds instead.
+
+TABLE: approval_rules
+  Conditional short-circuit rules. Evaluated after each approval action.
+  If a rule matches, remaining steps are skipped and expense auto-approves.
+  rule_type values:
+    'percentage'        →  if X% of approvers approved, auto-approve rest
+    'specific_approver' →  if a named approver approves, skip the rest
+    'hybrid'            →  either the percentage OR the named approver
+
+TABLE: role_relationships
+  Defines the hierarchy above Manager level.
+  head_user_id  = superior  (finance_head or director)
+  member_user_id = subordinate  (manager or finance_head)
+  Used by the approval engine to walk up the chain for medium/high-risk expenses.
+  UNIQUE(head_user_id, member_user_id) prevents duplicate links.
+
+TABLE: risk_thresholds
+  Per-company amount bands classifying expenses as low/medium/high risk.
+  The engine compares converted_amount to find the matching band.
+  If no thresholds are set, all expenses default to 'low' (manager only).
+
+
+────────────────────────────────────────────────────────────────────────────────
+3. AUTHENTICATION  (auth.py)
+────────────────────────────────────────────────────────────────────────────────
+
+SIGNUP FLOW  (POST /auth/signup)
+  1. Check email not already registered.
+  2. INSERT into companies (name, country, default_currency).
+  3. INSERT into users with role='admin', must_change_password=0.
+  4. Return success message.
+  The first user of every company is always the admin.
+
+LOGIN FLOW  (POST /auth/login)
+  1. Look up user by email.
+  2. verify_password(plain, hash) using bcrypt.
+  3. Create JWT token: create_token({user_id, role})
+       Token expires in 600 minutes (10 hours).
+       SECRET_KEY comes from SECRET_KEY env var (fallback hardcoded for dev).
+  4. Return token + role + name + user_id + must_change_password flag.
+  Frontend stores the token in localStorage and sends it as:
+       Authorization: Bearer <token>
+
+TOKEN VALIDATION  (get_current_user dependency)
+  Called on every protected route via Depends(get_current_user).
+  1. Extract Bearer token from Authorization header.
+  2. Decode JWT → get user_id.
+  3. Fetch full user row from DB.
+  4. Update users.last_seen = now()  (powers the online-users admin view).
+  5. Return user dict — available as `cu` (current user) in every route.
+
+ROLE ENFORCEMENT  (require_role(*roles))
+  Returns a FastAPI dependency that checks cu["role"] is in the allowed list.
+  Usage:  cu = Depends(require_role("admin"))
+          cu = Depends(require_role("admin", "manager"))
+  Returns 403 if role doesn't match.
+
+CHANGE PASSWORD  (POST /auth/change-password)
+  Verifies old password, hashes new password, sets must_change_password=0.
+
+
+────────────────────────────────────────────────────────────────────────────────
+4. ADMIN ROUTES  (/admin/*)   (admin_routes.py)
+────────────────────────────────────────────────────────────────────────────────
+
+All routes require role='admin'.
+
+--- USER MANAGEMENT ---
+
+POST /admin/users
+  Creates employee, manager, finance_head, or director.
+  Logic:
+    1. Check email not already registered.
+    2. Set is_approver=1 for manager/finance_head/director; 0 for employee.
+    3. Set approver_designation = "Manager" | "Finance Head" | "Director".
+    4. INSERT user row with hashed password and must_change_password=1.
+    5. Insert employee_approver_mappings if provided.
+    6. Commit.
+    7. If company has SMTP configured: send welcome email (no password in email).
+
+POST /admin/approvers  →  alias to /admin/users with role forced to 'manager'
+POST /admin/employees  →  alias to /admin/users (any role)
+
+GET  /admin/employees   →  all non-admin users with their approver_chain
+GET  /admin/approvers   →  all users with is_approver=1
+
+DELETE /admin/approvers/{id}
+  Cleans up in order:
+    1. DELETE employee_approver_mappings WHERE approver_id = id
+    2. DELETE approval_steps WHERE approver_id = id
+    3. DELETE role_relationships WHERE head_user_id=id OR member_user_id=id
+    4. DELETE users WHERE id = id AND company_id = admin's company
+  FK enforcement is ON so order matters — dependent rows deleted first.
+
+DELETE /admin/employees/{id}
+  Same cleanup pattern but for employees.
+
+--- CURRENT USERS (ONLINE VIEW) ---
+
+GET /admin/current-users
+  Returns all non-admin users grouped by role:
+    { "employee": [...], "manager": [...], "finance_head": [...], "director": [...] }
+  Each user includes last_seen so the frontend can show "online X minutes ago".
+
+--- TRUST SCORES ---
+
+POST /admin/trust-score
+  Body: { employee_id, trust_score }
+  Validates 0 ≤ score ≤ 100.
+  Verifies employee belongs to the admin's company.
+  Updates users.trust_score.
+  Also allowed for managers (require_role("admin", "manager")).
+
+--- ROLE RELATIONSHIPS ---
+
+POST /admin/relationships
+  Body: { head_user_id, member_user_id }
+  Creates a Finance Head → Manager or Director → Finance Head link.
+  Validates both users belong to the same company.
+  UNIQUE constraint on DB prevents duplicates.
+
+GET  /admin/relationships  →  all relationships with names and roles joined
+DELETE /admin/relationships/{id}  →  remove a single link
+
+--- RISK THRESHOLDS ---
+
+POST /admin/risk-thresholds
+  Body: { risk_level, min_amount, max_amount }
+  Replaces existing threshold for that risk_level (DELETE + INSERT).
+  One active threshold per risk level per company.
+
+GET  /admin/risk-thresholds  →  all thresholds for this company
+DELETE /admin/risk-thresholds/{id}  →  remove one
+
+--- SMTP SETTINGS ---
+
+POST /admin/settings/smtp  →  saves smtp_email and smtp_app_password to companies
+GET  /admin/settings/smtp  →  returns smtp_email only (never returns password)
+
+--- APPROVAL FLOW & RULES ---
+
+POST /admin/approval-flow   →  replaces the company's flow template steps
+GET  /admin/approval-flow   →  returns current flow template
+
+POST /admin/approval-rules  →  adds a conditional short-circuit rule
+GET  /admin/approval-rules  →  returns all rules with approver names
+DELETE /admin/approval-rules/{id}  →  removes one rule
+
+--- EXPENSES (ADMIN VIEW) ---
+
+GET /admin/expenses  →  all expenses from all employees in this company
+
+
+────────────────────────────────────────────────────────────────────────────────
+5. EXPENSE SUBMISSION  (expense_routes.py)
+────────────────────────────────────────────────────────────────────────────────
+
+POST /expenses/submit  (multipart/form-data)
+  Fields: amount, currency, category, description, vendor_name, date, time,
+          location, expense_lines (JSON string), receipt (file, optional)
+
+  Step-by-step:
+    1. Get employee's company and its default_currency.
+    2. Call currency_service.convert_currency(amount, currency, default_currency)
+         Uses ExchangeRate-API with a 1-hour in-memory cache per base currency.
+         Falls back to original amount if API is unavailable.
+    3. If receipt file uploaded:
+         a. Save to uploads/ with unique filename:
+              receipt_{user_id}_{date}_{uuid8}{ext}
+              UUID prevents collision when same user submits multiple receipts on same day.
+         b. Read bytes → call ocr_service.process_receipt(bytes)
+              Extracts: vendor_name, amount, date, currency, expense_lines from image text.
+         c. Compare OCR amount to submitted amount: match if diff < 1.0
+              Store result as ocr_match_status (1=match, 0=mismatch, NULL=no receipt).
+    4. INSERT into expenses with all fields.
+    5. INSERT expense_lines from parsed JSON form field.
+    6. Commit.
+    7. Call build_approval_steps(expense_id, user_id, company_id)
+         This determines risk level and creates the approval chain.
+    8. Query first approval step → send email to that approver via email_service.
+    9. Return { id, message }.
+
+GET /expenses/my
+  Returns all expenses for the current user with:
+    - Full approval trail (get_expense_trail)
+    - Expense line items
+
+GET /expenses/{id}
+  Authorization check:
+    - Owner (user who submitted) — always allowed
+    - Approver assigned to this expense — allowed
+    - Admin — allowed
+    - Anyone else — 403 Access Denied
+
+POST /expenses/ocr  (quick scan without saving)
+  Accepts a receipt file and returns OCR-extracted fields immediately.
+  Used by the frontend to pre-fill the submission form before the employee
+  manually confirms and submits.
+
+
+────────────────────────────────────────────────────────────────────────────────
+6. APPROVAL ENGINE  (services/approval_engine.py)
+────────────────────────────────────────────────────────────────────────────────
+
+--- _determine_risk_level(converted_amount, company_id, db) ---
+  Reads risk_thresholds for this company.
+  Iterates thresholds sorted by min_amount descending (highest first).
+  Returns the first risk_level whose range contains converted_amount.
+  If no thresholds are configured → returns 'low'.
+
+--- build_approval_steps(expense_id, user_id, company_id) ---
+
+  1. Fetch employee row and expense row.
+  2. Call _determine_risk_level → UPDATE expenses.risk_level.
+  3. Check employee_approver_mappings:
+       IF explicit mappings exist → copy them to approval_steps as-is.
+       Return early (no risk-based logic needed).
+  4. Get manager_id from employee row.
+       IF no manager → auto-approve the expense immediately (no chain).
+  5. Build steps list starting with [(1, manager_id)].
+  6. If risk_level is 'medium' or 'high':
+       Query role_relationships WHERE member_user_id = manager_id
+         → gives Finance Head → add as step 2.
+       If risk_level is 'high':
+         Query role_relationships WHERE member_user_id = finance_head_id
+           → gives Director → add as step 3.
+  7. INSERT all steps into approval_steps.
+
+--- process_approval_action(expense_id, approver_id, action, comment) ---
+
+  1. Fetch expense and find the PENDING step for this approver.
+     Return error if no pending step found (wrong approver or already acted).
+
+  REJECT:
+    UPDATE current step status='rejected', comment, acted_at.
+    UPDATE all later pending steps to status='skipped'.
+    UPDATE expenses.status='rejected'.
+    Return {status: "rejected"}.
+
+  ESCALATE:
+    UPDATE current step status='escalated', comment, acted_at.
+    Find Finance Head via role_relationships WHERE member_user_id = approver_id.
+    If no Finance Head → return error.
+    If Finance Head step doesn't already exist:
+      Shift all later pending step_orders up by 1.
+      INSERT new approval_step for Finance Head at next position.
+    UPDATE expenses.current_step.
+    Return {status: "escalated", next_step: N}.
+
+  APPROVE:
+    UPDATE current step status='approved', comment, acted_at.
+    Call check_rules() → check if any conditional rule short-circuits the chain.
+      If rule triggers:
+        Skips remaining steps, sets expenses.status='approved'.
+        Return {status: "approved", reason: "conditional_rule"}.
+    Look for next pending step (step_order > current).
+      IF next step exists:
+        UPDATE expenses.current_step to next step.
+        Return {status: "pending", next_step: N}.
+      ELSE (all steps done):
+        UPDATE expenses.status='approved'.
+        Return {status: "approved"}.
+
+--- check_rules(expense_id, approver_id, company_id, step_order, db) ---
+  Fetches all active approval_rules for the company.
+  For each rule:
+    Skip if expense amount is outside rule's min/max range.
+    Skip if rule has a category filter and it doesn't match.
+    Check rule type:
+      'percentage':        approved/total*100 >= threshold_percentage  → "approved"
+      'specific_approver': approver_id == specific_approver_id         → "approved"
+      'hybrid':            either of the above                         → "approved"
+  Returns "approved" if any rule fires, None otherwise.
+
+--- get_expense_trail(expense_id) ---
+  Returns all approval_steps for an expense joined with approver name, designation,
+  and role. Sorted by step_order.
+  Used in every expense list view to render the approval timeline.
+
+
+────────────────────────────────────────────────────────────────────────────────
+7. APPROVAL ROUTES  (/approvals/*)   (approval_routes.py)
+────────────────────────────────────────────────────────────────────────────────
+
+GET /approvals/pending
+  Returns all expenses where:
+    approval_steps.approver_id = current user
+    approval_steps.status = 'pending'
+    expenses.status = 'pending'
+  Includes employee trust_score in results (shown in manager dashboard).
+  Includes full approval trail per expense.
+
+POST /approvals/{expense_id}/action
+  Body: { action: "approve"|"reject"|"escalate", comment: "..." }
+  1. Validate action is one of the three allowed values.
+  2. Call process_approval_action() in approval_engine.
+  3. On error → 400 with error message.
+  4. After action, send email notification:
+       If status='approved' or 'rejected':
+         send_status_notification to the employee.
+       If status='pending' or 'escalated' (more steps remain):
+         Fetch the next approver from approval_steps.
+         send_approval_notification to the next approver.
+  5. Return result from engine.
+
+GET /approvals/history
+  Returns all approval_steps this user has acted on (status not pending/skipped).
+  Joined with expense details and employee name.
+
+GET /approvals/team-expenses
+  For managers: all expenses from employees where users.manager_id = current user.
+  For finance_head / director: all expenses where they appear in approval_steps.
+  Includes full trail per expense.
+  Used in the manager/finance_head/director dashboards to see their team's expenses.
+
+
+────────────────────────────────────────────────────────────────────────────────
+8. OCR ROUTES  (/ocr/*)   (ocr_routes.py)
+────────────────────────────────────────────────────────────────────────────────
+
+POST /ocr/scan
+  Accepts image file (max 10 MB, must be image/* content type).
+  Calls ocr_service.process_receipt(bytes).
+  Returns extracted fields: vendor_name, amount, currency, date, expense_lines.
+  Used by the frontend upload form to auto-fill fields before submission.
+
+GET /ocr/expense/{expense_id}
+  Returns stored ocr_raw_data and ocr_match_status for an already-saved expense.
+  Authorization: owner, assigned approver, or admin only.
+
+
+────────────────────────────────────────────────────────────────────────────────
+9. OCR SERVICE  (services/ocr_service.py)
+────────────────────────────────────────────────────────────────────────────────
+
+OCR_AVAILABLE flag: True if pytesseract is installed, False otherwise.
+If False, all OCR calls return empty string (graceful degradation).
+
+process_receipt(image_bytes):
+  1. extract_text(): opens image with PIL, runs pytesseract.image_to_string().
+  2. If no text extracted → return {error, raw_text}.
+  3. parse_receipt(text):
+       vendor_name  →  first non-empty line of the receipt text
+       date         →  regex for DD/MM/YYYY, MM/DD/YYYY, YYYY-MM-DD patterns
+       amount       →  regex for "Total: 123.45", "$123.45", "123.45" patterns
+                       takes the MAXIMUM found value (total is usually largest)
+       currency     →  symbol detection ($→USD, £→GBP, €→EUR, ₹→INR)
+       expense_lines→  regex pairs of (item description, price)
+       description  →  first 2 lines after the vendor name
+  4. Returns parsed dict + raw_text.
+
+
+────────────────────────────────────────────────────────────────────────────────
+10. CURRENCY SERVICE  (services/currency_service.py)
+────────────────────────────────────────────────────────────────────────────────
+
+In-memory cache: { "USD": { "rates": {...}, "ts": float } }
+Cache TTL: 3600 seconds (1 hour). Avoids hammering the exchange-rate API.
+
+convert_currency(amount, from_currency, to_currency):
+  If same currency → return amount unchanged.
+  Call get_rates(from_currency) → fetch or return cached rates.
+  Multiply amount by rates[to_currency].
+  On any API failure → return original amount (safe fallback).
+
+get_countries_with_currencies():
+  Fetches from restcountries.com → returns sorted list of
+  { country, currency_code, currency_name, symbol }.
+  Used by GET /countries endpoint for the signup currency dropdown.
+
+
+────────────────────────────────────────────────────────────────────────────────
+11. EMAIL SERVICE  (services/email_service.py)
+────────────────────────────────────────────────────────────────────────────────
+
+All three functions send via Gmail SMTP SSL (port 465).
+Each returns True on success, False on failure (never raises — fire-and-forget).
+All emails include both plain text and HTML parts (MIMEMultipart("alternative")).
+
+send_email(smtp_email, smtp_app_password, to, name, pwd=None)
+  Sends account-created notification.
+  Password is intentionally NOT included in the email body (security).
+  Called when admin creates any new user.
+
+send_approval_notification(smtp_email, smtp_app_password, to, approver_name,
+                            employee_name, expense_id, amount, currency, category)
+  Notifies an approver that a new expense needs their review.
+  Includes expense details table. Optional portal_url for a direct review link.
+  Called: after expense submission (first approver) and after each approve/escalate
+          (next approver in chain).
+
+send_status_notification(smtp_email, smtp_app_password, to, employee_name,
+                          expense_id, amount, currency, status, comment, portal_url)
+  Notifies employee their expense was approved or rejected.
+  Includes colour-coded status (green=approved, red=rejected) and rejection comment.
+  Called: when expenses.status transitions to 'approved' or 'rejected'.
+
+
+────────────────────────────────────────────────────────────────────────────────
+12. COMPLETE END-TO-END FLOWS
+────────────────────────────────────────────────────────────────────────────────
+
+FLOW A: Organisation Setup
+  1.  POST /auth/signup          → company + admin created
+  2.  POST /auth/login           → admin gets JWT
+  3.  POST /admin/settings/smtp  → SMTP credentials saved
+  4.  POST /admin/users (role=director)       → director created, welcome email sent
+  5.  POST /admin/users (role=finance_head)   → finance head created, welcome email sent
+  6.  POST /admin/users (role=manager)        → manager created, welcome email sent
+  7.  POST /admin/users (role=employee, manager_id=X)  → employee created, welcome email sent
+  8.  POST /admin/relationships  → link director → finance_head
+  9.  POST /admin/relationships  → link finance_head → manager
+  10. POST /admin/risk-thresholds (low: 0–1000, medium: 1001–5000, high: 5001+)
+
+FLOW B: Employee Submits an Expense (HIGH RISK)
+  1.  POST /expenses/submit (amount=8000, currency=USD)
+        → convert_currency: 8000 USD → 664000 INR (example)
+        → OCR scan if receipt attached
+        → INSERT expenses (status='pending')
+        → build_approval_steps:
+             _determine_risk_level(664000) → 'high'
+             UPDATE expenses.risk_level = 'high'
+             steps = [Manager(1), Finance Head(2), Director(3)]
+             INSERT 3 rows into approval_steps
+        → email sent to Manager
+  2.  GET /approvals/pending  (Manager logs in)
+        → sees the expense with trust_score of employee
+  3.  POST /approvals/{id}/action { action:"approve", comment:"looks good" }
+        → step 1 approved
+        → check_rules → no short-circuit
+        → next step = 2 (Finance Head)
+        → email sent to Finance Head
+  4.  POST /approvals/{id}/action  (Finance Head approves)
+        → step 2 approved
+        → next step = 3 (Director)
+        → email sent to Director
+  5.  POST /approvals/{id}/action  (Director approves)
+        → step 3 approved
+        → no more pending steps
+        → UPDATE expenses.status = 'approved'
+        → email sent to Employee: "Your expense has been approved"
+  6.  GET /expenses/my  (Employee sees status = approved, full trail)
+
+FLOW C: Manager Escalates (MEDIUM RISK)
+  1.  Expense submitted → risk='medium' → steps: [Manager(1), Finance Head(2)]
+  2.  Manager acts: POST /approvals/{id}/action { action:"escalate", comment:"needs review" }
+        → step 1 status='escalated'
+        → Finance Head already in chain as step 2 (no duplication)
+        → email sent to Finance Head
+
+FLOW D: Rejection Flow
+  1.  Manager rejects: POST /approvals/{id}/action { action:"reject", comment:"receipt invalid" }
+        → step 1 status='rejected'
+        → all later steps (2, 3) status='skipped'
+        → expenses.status='rejected'
+        → email sent to Employee with rejection comment
+  2.  GET /expenses/my  (Employee sees status=rejected, reason="receipt invalid", who rejected)
+
+FLOW E: Trust Score Update
+  1.  Manager reviews employee's history of approvals/rejections
+  2.  POST /admin/trust-score { employee_id: X, trust_score: 72 }
+        → UPDATE users.trust_score = 72
+        → visible to manager in GET /approvals/pending (trust_score field)
+        → visible in GET /admin/current-users
+
+
+────────────────────────────────────────────────────────────────────────────────
+13. ROLE-BASED ACCESS CONTROL SUMMARY
+────────────────────────────────────────────────────────────────────────────────
+
+  Endpoint pattern        Allowed roles
+  ─────────────────────────────────────────────────
+  /auth/*                 public (signup/login) or any authenticated user
+  /admin/*                admin only
+  /admin/trust-score      admin OR manager
+  /expenses/submit        any authenticated user
+  /expenses/my            any authenticated user (own data only)
+  /expenses/{id}          owner OR assigned approver OR admin
+  /approvals/pending      any authenticated user (filtered to their steps)
+  /approvals/{id}/action  any authenticated user (engine checks they have a pending step)
+  /approvals/history      any authenticated user (own history)
+  /approvals/team-expenses manager / finance_head / director
+  /ocr/scan               any authenticated user
+  /ocr/expense/{id}       owner OR assigned approver OR admin
+
+
+────────────────────────────────────────────────────────────────────────────────
+14. API ENDPOINT REFERENCE
+────────────────────────────────────────────────────────────────────────────────
+
+AUTH
+  POST   /auth/signup                   Register new company + admin
+  POST   /auth/login                    Get JWT token
+  POST   /auth/change-password          Change own password
+  GET    /auth/me                       Get current user + company info
+
+ADMIN — USER MANAGEMENT
+  POST   /admin/users                   Create any role (employee/manager/finance_head/director)
+  POST   /admin/employees               Alias → /admin/users
+  POST   /admin/approvers               Alias → /admin/users with role=manager
+  GET    /admin/employees               List all non-admin users with approver chains
+  GET    /admin/approvers               List all users with is_approver=1
+  DELETE /admin/employees/{id}          Delete employee + cleanup mappings/relationships
+  DELETE /admin/approvers/{id}          Delete approver + cleanup steps/mappings/relationships
+  GET    /admin/current-users           All users grouped by role with last_seen
+  POST   /admin/trust-score             Update employee trust score
+
+ADMIN — ORGANISATION
+  GET    /admin/relationships           List all head→member relationships
+  POST   /admin/relationships           Create Finance Head→Manager or Director→Staff link
+  DELETE /admin/relationships/{id}      Remove a relationship
+  GET    /admin/risk-thresholds         List risk amount thresholds
+  POST   /admin/risk-thresholds         Set low/medium/high amount range
+  DELETE /admin/risk-thresholds/{id}    Remove a threshold
+  GET    /admin/settings/smtp           Get SMTP email (password never returned)
+  POST   /admin/settings/smtp           Save SMTP credentials
+
+ADMIN — APPROVALS
+  GET    /admin/approval-flow           Get current flow template
+  POST   /admin/approval-flow           Replace flow template
+  GET    /admin/approval-rules          List conditional rules
+  POST   /admin/approval-rules          Add a conditional rule
+  DELETE /admin/approval-rules/{id}     Remove a rule
+  GET    /admin/expenses                All company expenses
+
+EXPENSES
+  POST   /expenses/submit               Submit a new expense (multipart/form-data)
+  POST   /expenses/ocr                  Quick OCR scan (no save)
+  GET    /expenses/my                   My submitted expenses + trails
+  GET    /expenses/{id}                 Single expense detail (auth-checked)
+
+APPROVALS
+  GET    /approvals/pending             My pending approval requests
+  POST   /approvals/{id}/action         Approve / Reject / Escalate
+  GET    /approvals/history             My past approval decisions
+  GET    /approvals/team-expenses       All expenses in my team
+
+OCR
+  POST   /ocr/scan                      Upload image → get extracted fields
+  GET    /ocr/expense/{id}              Get stored OCR data for a saved expense
+
+UTILITY
+  GET    /                              Health check
+  GET    /countries                     Country + currency list
+
+
+────────────────────────────────────────────────────────────────────────────────
+15. FILE STRUCTURE
+────────────────────────────────────────────────────────────────────────────────
+
+backend/
+├── main.py                      App entry point, router registration, CORS
+├── database.py                  Schema, get_db(), init_db()
+├── auth.py                      JWT, bcrypt, get_current_user, require_role
+├── schemas.py                   Pydantic models (reference; not used by routes)
+├── reimbursement.db             SQLite database file (auto-created)
+├── uploads/                     Receipt files served as static files
+├── routes/
+│   ├── auth_routes.py           /auth/*
+│   ├── admin_routes.py          /admin/*
+│   ├── expense_routes.py        /expenses/*
+│   ├── approval_routes.py       /approvals/*
+│   └── ocr_routes.py            /ocr/*
+└── services/
+    ├── approval_engine.py       Risk detection, chain building, action processing
+    ├── currency_service.py      ExchangeRate-API with 1-hour cache
+    ├── email_service.py         Gmail SMTP notifications (3 email types)
+    ├── ocr_service.py           pytesseract image→text→structured data
+    └── __init__.py
+
+================================================================================
+END OF LOGIC DOCUMENTATION
+================================================================================
