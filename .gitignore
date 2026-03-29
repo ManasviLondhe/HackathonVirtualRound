@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # dependencies
 node_modules/
 frontend/node_modules/
@@ -21,3 +22,32 @@ yarn-error.log*
 # lock files (optional but okay to keep one)
 package-lock.json
 frontend/package-lock.json
+=======
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+venv/
+.env
+.venv
+env/
+
+# Databases (Crucial for SQLite)
+*.db
+*.sqlite3
+
+# Uploads (Don't sync local receipt images)
+backend/uploads/*
+!backend/uploads/.gitkeep
+
+# Node / React
+node_modules/
+build/
+dist/
+.eslintcache
+.stylelintcache
+
+# OS specific
+.DS_Store
+Thumbs.db
+>>>>>>> d7557e427caf6c68009891c4c1a07e1b26a29b60
